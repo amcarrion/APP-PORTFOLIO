@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Analizador de Empresas</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+:root{--bg:#fff;--fg:#0f172a;--mut:#64748b;--card:#f1f5f9;--bd:#e2e8f0;--ac:#2563eb;--ok:#d1fae5;--bad:#fee2e2;--warn:#fef3c7}
+@media(prefers-color-scheme:dark){:root{--bg:#0b1220;--fg:#e5e7eb;--mut:#94a3b8;--card:#131c2e;--bd:#24304a;--ok:#064e3b;--bad:#7f1d1d;--warn:#78350f}}
+*{box-sizing:border-box}body{margin:0;font:15px/1.55 system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--fg)}
+main{max-width:1150px;margin:auto;padding:14px}h1{font-size:22px;margin:4px 0}h3{margin:22px 0 8px}
+.mut{color:var(--mut);font-size:13px}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+input,select,button{font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--bd);background:var(--card);color:var(--fg)}
+button{cursor:pointer;background:var(--ac);color:#fff;border:0}button.s{background:var(--card);color:var(--fg);border:1px solid var(--bd)}
+#tabs{display:flex;gap:6px;overflow-x:auto;margin:14px 0}#tabs button.on{background:var(--ac);color:#fff}#tabs button{background:var(--card);color:var(--fg);white-space:nowrap}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}.g2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:10px}
+.k{background:var(--card);border-radius:10px;padding:8px 12px}.k b{display:block;font-size:19px}.k span{font-size:12px;color:var(--mut)}
+.box{border-radius:10px;padding:10px 14px;margin:8px 0;background:var(--card)}.ok{background:var(--ok)}.bad{background:var(--bad)}.warn{background:var(--warn)}
+.bar{background:var(--bd);border-radius:6px;height:8px;margin:2px 0 8px}.bar i{display:block;height:8px;border-radius:6px;background:var(--ac)}
+table{border-collapse:collapse;width:100%;font-size:14px}td,th{padding:6px 8px;border-bottom:1px solid var(--bd);text-align:left}
+section{display:none}section.on{display:block}details{margin:8px 0}.w{width:90px}ul{margin:4px 0;padding-left:20px}
+</style></head><body><main>
+<h1>📊 Analizador de Empresas</h1>
+<div class="mut">Método de la masterclass: 4 preguntas, 3 factores y 2 cubetas. Datos de Yahoo Finance; narrativa y moats por IA. Cualquier ticker (AAPL, WALMEX.MX, ASML.AS, 7203.T…)</div>
+<div class="row" style="margin-top:10px">
+  <input id="tk" value="SPCX" placeholder="Tickers separados por coma" style="flex:1;min-width:200px">
+  <select id="yrs"><option value="1">1 año</option><option value="3">3 años</option><option value="5" selected>5 años</option><option value="10">10 años</option></select>
+  <button id="go">Analizar</button>
+</div>
+<div class="row" style="margin-top:8px">
+  <input id="code" type="password" placeholder="Código de acceso" style="width:170px">
+  <label class="mut"><input id="useai" type="checkbox" checked> Usar IA (gasta tokens)</label>
+  <label class="mut"><input id="web" type="checkbox"> Buscar en la web (más lento, más caro)</label>
+  <input id="manual" placeholder="Peers manuales (opcional): AAPL,MSFT" style="min-width:230px">
+</div>
+<details><summary>Pesos del score</summary><div class="row" id="ws"></div></details>
+<div id="st" class="mut"></div>
+<div id="tabs"></div><div id="panels"></div>
+<p class="mut">Herramienta educativa, no es recomendación de inversión.</p>
+</main>
+<script>
+const $=s=>document.querySelector(s),nn=x=>typeof x==="number"&&isFinite(x),K=t=>t.replace(/\W/g,"_");
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const sum=a=>a.reduce((s,x)=>s+x,0),mean=a=>{a=a.filter(nn);return a.length?sum(a)/a.length:NaN};
+const med=a=>{a=a.filter(nn).sort((x,y)=>x-y);if(!a.length)return NaN;const m=a.length>>1;return a.length%2?a[m]:(a[m-1]+a[m])/2};
+const sc=(x,b,g)=>nn(x)?Math.min(1,Math.max(0,(x-b)/(g-b)))*10:5;
+const fm=(x,k)=>!nn(x)?"—":k==="p"?(x*100).toFixed(1)+"%":k==="x"?x.toFixed(1)+"x":x.toLocaleString("es-MX",{maximumFractionDigits:1});
+const PIL=["Calidad","Crecimiento","Solidez","Valuación","Moat"],COL=["#2563eb","#f59e0b","#10b981","#ef4444","#8b5cf6","#06b6d4"];
+const W=()=>[...document.querySelectorAll(".w")].map(x=>+x.value);
+$("#ws").innerHTML=PIL.map((p,i)=>`<label class="mut">${p} <input class="w" type="number" min="0" max="10" value="${[3,2,2,2,3][i]}"></label>`).join("");
+$("#code").value=localStorage.getItem("code")||"";$("#code").onchange=e=>localStorage.setItem("code",e.target.value);
+let R={},PF=JSON.parse(localStorage.getItem("pf")||"[]");
+
+const api=async(u,o)=>{const r=await fetch(u,o);let j;try{j=await r.json()}catch{throw new Error("Respuesta inválida ("+r.status+")")}if(!r.ok||j.error)throw new Error(j.error||r.status);return j};
+const P=(id,d,l={})=>{const e=document.getElementById(id);if(e)Plotly.newPlot(e,d,{margin:{t:34,l:42,r:10,b:30},paper_bgcolor:"rgba(0,0,0,0)",plot_bgcolor:"rgba(0,0,0,0)",font:{color:getComputedStyle(document.body).color},...l},{displayModeBar:false,responsive:true})};
+const bars=(id,title,lab,val,hl,m)=>P(id,[{type:"bar",x:lab,y:val,marker:{color:lab.map((_,i)=>i===hl?"#2563eb":"#94a3b8")}}],{title:{text:title,font:{size:13}},height:230,shapes:nn(m)?[{type:"line",xref:"paper",x0:0,x1:1,y0:m,y1:m,line:{dash:"dot",color:"#ef4444"}}]:[]});
+const roll=(a,n)=>a.map((_,i)=>i<n-1?null:sum(a.slice(i-n+1,i+1))/n);
+
+/* ---------- métricas y score ---------- */
+function metrics(D){const i=D.info,f=D.fin,rev=f.filter(x=>nn(x.rev)),n=rev.length,px=D.c[D.c.length-1];
+ const mg=k=>f.filter(x=>nn(x[k])&&nn(x.rev)&&x.rev).map(x=>({y:x.y,v:x[k]/x.rev})),last=a=>a.length?a[a.length-1].v:NaN;
+ const fc=f.filter(x=>nn(x.fcf)),sh=f.filter(x=>nn(x.sh)&&x.sh>0);
+ return{cagr:n>1&&rev[0].rev>0&&rev[n-1].rev>0?Math.pow(rev[n-1].rev/rev[0].rev,1/(n-1))-1:NaN,
+  mb:mg("gp"),mo:mg("op"),mn:mg("ni"),mol:last(mg("op")),mbl:last(mg("gp")),roe:i.roe??NaN,rg:i.rg??NaN,eg:i.eg??NaN,
+  de:i.de??NaN,cr:i.cr??NaN,fcfpos:fc.length?fc.filter(x=>x.fcf>0).length/fc.length*10:5,
+  pe:i.pe??NaN,fpe:i.fpe??NaN,ev:i.ev??NaN,ps:nn(i.ps)?i.ps:(nn(i.mc)&&n&&rev[n-1].rev>0?i.mc/rev[n-1].rev:NaN),
+  pfcf:nn(i.mc)&&fc.length&&fc[fc.length-1].fcf>0?i.mc/fc[fc.length-1].fcf:NaN,div:nn(i.divRate)&&px?i.divRate/px:NaN,
+  shc:sh.length>1?sh[sh.length-1].sh/sh[0].sh-1:NaN,px,mc:i.mc??NaN,
+  loss:!(nn(i.pe)&&i.pe>0)}}
+function histMult(D){return D.fin.filter(x=>nn(x.sh)&&x.sh>0&&x.dt).map(x=>{let p=NaN;for(let i=D.t.length-1;i>=0;i--)if(D.t[i]<=x.dt){p=D.c[i];break}
+ return{y:x.y,pe:nn(p)&&nn(x.ni)&&x.ni>0?p/(x.ni/x.sh):NaN,ps:nn(p)&&nn(x.rev)&&x.rev>0?p*x.sh/x.rev:NaN}})}
+function calc(t){const r=R[t],m=r.m,pm=r.pm||{},hp={pe:mean(r.hm.map(x=>x.pe)),ps:mean(r.hm.map(x=>x.ps))};r.hp=hp;
+ const moat=r.a&&nn(+r.a.moat_score)?+r.a.moat_score:5,rat=[],add=(a,b)=>{if(nn(a)&&nn(b)&&a>0&&b>0)rat.push(a/b)};
+ if(m.loss){add(m.ps,pm.ps);add(m.ps,hp.ps)}else{add(m.pe,pm.pe);add(m.pe,hp.pe);add(m.ev,pm.ev)}
+ const val=rat.length?mean(rat.map(x=>sc(x,1.6,.6))):m.loss?sc(m.ps,25,4):sc(nn(m.fpe)?m.fpe:m.pe,40,12);
+ r.s=[mean([sc(m.roe,.05,.25),sc(m.mol,.05,.3),sc(m.mbl,.2,.7)]),mean([sc(m.cagr,0,.15),sc(m.rg,0,.15),sc(m.eg,0,.2)]),
+  mean([sc(m.de,200,30),sc(m.cr,.8,2),m.fcfpos]),val,moat];
+ const w=W();r.tot=sum(r.s.map((x,i)=>x*w[i]))/Math.max(1,sum(w))*10}
+
+/* ---------- gráficas ---------- */
+function radar(id,items){P(id,items.map(([n,s],k)=>({type:"scatterpolar",r:[...s,s[0]],theta:[...PIL,PIL[0]],fill:"toself",name:n,line:{color:COL[k%6]},opacity:.65})),{polar:{radialaxis:{range:[0,10]}},height:340,margin:{t:20,b:20},showlegend:items.length>1})}
+function gauge(id,v){const c=v<45?"#ef4444":v<65?"#f59e0b":"#10b981";P(id,[{type:"indicator",mode:"gauge+number",value:v,title:{text:"Score total"},gauge:{axis:{range:[0,100]},bar:{color:c},steps:[{range:[0,45],color:"#fee2e2"},{range:[45,65],color:"#fef3c7"},{range:[65,100],color:"#d1fae5"}]}}],{height:300,margin:{t:60,b:10,l:25,r:25}})}
+function sliceYrs(D){const from=D.t[D.t.length-1]-(+$("#yrs").value)*31557600;return D.t.map((x,i)=>x>=from?i:-1).filter(i=>i>=0)}
+function paintPrice(t){const D=R[t].D,ix=sliceYrs(D),m50=roll(D.c,50),m200=roll(D.c,200),pk=a=>ix.map(i=>a[i]),x=ix.map(i=>new Date(D.t[i]*1000));
+ P("pr-"+K(t),[{x,y:pk(D.c),name:"Precio",line:{color:COL[0]}},{x,y:pk(m50),name:"MM50",line:{color:COL[1],width:1}},{x,y:pk(m200),name:"MM200",line:{color:COL[3],width:1}}],{title:{text:"Precio "+t,font:{size:13}},height:340,hovermode:"x unified"})}
+function paintFin(t){const r=R[t],f=r.D.fin,y=f.map(x=>x.y),b=k=>f.map(x=>nn(x[k])?x[k]/1e9:null);
+ P("fi-"+K(t),[{type:"bar",x:y,y:b("rev"),name:"Ventas",marker:{color:COL[0]}},{type:"bar",x:y,y:b("ni"),name:"Utilidad neta",marker:{color:COL[1]}},{type:"bar",x:y,y:b("fcf"),name:"FCF",marker:{color:COL[2]}}],{title:{text:"Miles de millones",font:{size:13}},barmode:"group",height:320});
+ const L=(a,n,c)=>({x:a.map(z=>z.y),y:a.map(z=>z.v*100),name:n,mode:"lines+markers",line:{color:c}});
+ P("mg-"+K(t),[L(r.m.mb,"Bruto",COL[3]),L(r.m.mo,"Operativo",COL[4]),L(r.m.mn,"Neto",COL[5])],{title:{text:"Márgenes (%)",font:{size:13}},height:320})}
+function paintScore(t){const r=R[t];gauge("ga-"+K(t),r.tot);radar("ra-"+K(t),[[t,r.s]]);
+ const s=r.tot,g=s<55?"Score bajo: mejor observar que comprar":s<68?"Posición exploratoria: 1–3% del portafolio":s<80?"Convicción media: 4–7% (rango intermedio mío, no del orador)":"Alta convicción: 8–10%+, cuidando no concentrar";
+ $("#cb-"+K(t)).innerHTML=`<div class="box ok"><b>${g}.</b> Entra escalonado, en varias compras. Referencia educativa, no recomendación.</div>
+ <p><b>Vende solo si:</b> 1) la tesis se rompió · 2) llega una disrupción tecnológica real · 3) aparece una oportunidad con mejor riesgo/beneficio · 4) la posición creció tanto que desbalancea tu portafolio. <i>Que el precio suba no es razón para vender.</i></p>`+
+ (r.a?.vigilar?`<b>Señales a vigilar en ${esc(t)}:</b><ul>${r.a.vigilar.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>`:"")}
+function paintQ4(t){const r=R[t],m=r.m,k=K(t),hm=r.hm,ps=m.loss;
+ $("#q4-"+k).innerHTML=`<div class="grid">${[[ps?"P/S actual":"P/E actual",fm(ps?m.ps:m.pe,"x")],[ps?"P/S promedio propio":"P/E promedio propio",fm(ps?r.hp.ps:r.hp.pe,"x")],[ps?"P/S mediana peers":"P/E mediana peers",fm(ps?r.pm?.ps:r.pm?.pe,"x")],["EV/EBITDA",fm(m.ev,"x")]].map(([a,b])=>`<div class="k"><span>${a}</span><b>${b}</b></div>`).join("")}</div>`+
+ (ps?`<div class="box warn">${esc(t)} no tiene utilidad positiva, así que el P/E no sirve: la valuación se mide con P/S (precio/ventas). Un P/S alto exige que las ventas sigan creciendo muy rápido.</div>`:"")+
+ `<div id="mh-${k}"></div>`;
+ const h=hm.filter(x=>nn(ps?x.ps:x.pe));if(h.length)bars("mh-"+k,(ps?"P/S":"P/E")+" al cierre de cada año fiscal vs. hoy",[...h.map(x=>String(x.y)),"Hoy"],[...h.map(x=>ps?x.ps:x.pe),ps?m.ps:m.pe],h.length,ps?r.pm?.ps:r.pm?.pe);
+ else $("#mh-"+k).innerHTML='<p class="mut">Sin múltiplo histórico (Yahoo no trae suficientes estados anuales).</p>'}
+function paintAI(t){const r=R[t],a=r.a,k=K(t);
+ if(r.aerr){$("#ai-"+k).innerHTML=`<div class="box warn">${esc(r.aerr)} El moat cuenta como 5/10 (neutral).</div>`;$("#fx-"+k).innerHTML="";return}
+ if(!a)return;const p1=a.p1_ingresos||{},p2=a.p2_retencion||{},p3=a.p3_futuro||{},ul=x=>`<ul>${(x||[]).map(y=>`<li>${esc(y)}</li>`).join("")}</ul>`;
+ $("#ai-"+k).innerHTML=`<div class="g2"><div class="box"><b>1. ¿De dónde sale la lana?</b><br>${esc(p1.resumen)}</div><div id="pie-${k}"></div></div>
+ <p><b>2. ¿Por qué no se van sus clientes?</b> ${esc(p2.resumen)}<br>Moat global: <b>${esc(a.moat_score)}/10</b> · tendencia <b>${esc(a.moat_tendencia)}</b></p>
+ ${(p2.moats||[]).map(x=>`<div>${esc(x.tipo)} (${esc(x.fuerza)}/10) — <span class="mut">${esc(x.porque)}</span><div class="bar"><i style="width:${Math.min(100,Math.max(0,x.fuerza*10))}%"></i></div></div>`).join("")}
+ <p><b>3. ¿Por qué debería valer más en 5 años?</b> ${esc(p3.resumen)}</p>${ul(p3.motores)}<p><b>4. ¿El precio vale la pena?</b> ${esc(a.p4_precio)}</p>`;
+ const seg=p1.segmentos||[];if(seg.length)P("pie-"+k,[{type:"pie",labels:seg.map(x=>x.nombre),values:seg.map(x=>x.pct),hole:.5}],{height:240,margin:{t:10,b:10}});
+ let mx=0;const c=R[t].D.c,dd=Math.min(...c.map(x=>{mx=Math.max(mx,x);return x/mx-1}));
+ $("#fx-"+k).innerHTML=`<div class="g2"><div class="box"><b>Entorno</b><br>Beta: ${fm(r.D.info.beta)} · peor caída del historial: ${fm(dd,"p")}<br>${esc(a.entorno)}</div>
+ <div class="box"><b>Narrativa</b><br>${esc(a.narrativa)}<br><i>Qué la cambiaría:</i> ${esc(a.cambio_narrativa)}</div>
+ <div class="box"><b>Negocio</b><br>Ventas (CAGR): ${fm(r.m.cagr,"p")} · Margen op.: ${fm(r.m.mol,"p")} · Años con FCF positivo: ${fm(r.m.fcfpos/10,"p")}</div></div>
+ <div class="g2"><div class="box ok"><b>A favor</b>${ul(a.bull)}</div><div class="box bad"><b>Riesgos</b>${ul(a.bear)}</div></div><p><b>Veredicto:</b> ${esc(a.veredicto)}</p>`}
+function paintPeers(t){const r=R[t],k=K(t),i=r.D.info,ps=r.m.loss,rows=[{t,name:"► "+(i.name||t),pe:i.pe,ev:i.ev,ps:r.m.ps,mo:i.mo,roe:i.roe,rg:i.rg},...r.peers];
+ if(r.peers.length<1){$("#pe-"+k).innerHTML='<p class="mut">Sin peers todavía (los propone la IA).</p>';return}
+ const cols=[[ps?"ps":"pe",ps?"P/S":"P/E","x"],["ev","EV/EBITDA","x"],["mo","Margen op.","p"],["roe","ROE","p"],["rg","Crec. ventas","p"]];
+ $("#pe-"+k).innerHTML=`<div class="g2">${cols.map(c=>`<div id="pc-${k}-${c[0]}"></div>`).join("")}</div><div style="overflow-x:auto"><table><tr><th>Empresa</th>${cols.map(c=>`<th>${c[1]}</th>`).join("")}</tr>${rows.map(x=>`<tr><td>${esc(x.name)}</td>${cols.map(c=>`<td>${fm(x[c[0]],c[2])}</td>`).join("")}</tr>`).join("")}</table></div>`;
+ cols.forEach(c=>bars(`pc-${k}-${c[0]}`,c[1],rows.map(x=>x.t),rows.map(x=>nn(x[c[0]])?x[c[0]]:null),0,med(r.peers.map(x=>x[c[0]]))))}
+
+/* ---------- pestañas ---------- */
+function tabHTML(t){const r=R[t],i=r.D.info,m=r.m,k=K(t),young=r.D.c.length<250||r.D.fin.length<2;
+ const kp=[["P/E",fm(m.pe,"x")],["P/S",fm(m.ps,"x")],["EV/EBITDA",fm(m.ev,"x")],["P/FCF",fm(m.pfcf,"x")],["ROE",fm(m.roe,"p")],["Margen op.",fm(m.mol,"p")],["Ventas CAGR",fm(m.cagr,"p")],["Deuda/Capital",fm(nn(m.de)?m.de/100:NaN,"x")],["Razón circulante",fm(m.cr,"x")],["Dividendo",fm(m.div,"p")],["Cambio en acciones",fm(m.shc,"p")],["Valor de mercado (MM)",fm(nn(m.mc)?m.mc/1e6:NaN)]];
+ return`<h2 style="margin:0">${esc(i.name)} (${esc(t)})</h2><div class="mut">${esc(i.sector||"—")} · ${esc(i.industry||"—")} · ${esc(i.country||"—")} · ${esc(i.cur)}</div>
+ ${young?'<div class="box warn">Poco historial en Yahoo (empresa recién listada o sin estados anuales completos). Varios indicadores salen en blanco y el score los cuenta como neutros (5/10): tómalo con cautela.</div>':""}
+ <div class="g2"><div id="ga-${k}"></div><div id="ra-${k}"></div></div><div class="grid">${kp.map(([a,b])=>`<div class="k"><span>${a}</span><b>${b}</b></div>`).join("")}</div>
+ <h3>🧠 Las 4 preguntas de la masterclass</h3><div id="ai-${k}" class="box">Analizando con IA… (puede tardar ~20 s)</div>
+ <div id="q4-${k}"></div><h3>🌪️ Qué mueve el precio: entorno, narrativa y negocio</h3><div id="fx-${k}"></div>
+ <h3>🪣 Cubeta activa: cuánto y cuándo salir</h3><div id="cb-${k}"></div>
+ <h3>📊 Históricos</h3><div id="pr-${k}"></div><div class="g2"><div id="fi-${k}"></div><div id="mg-${k}"></div></div>
+ <h3>🏁 Vs. sector (peers)</h3><div id="pe-${k}"><p class="mut">Cargando peers…</p></div>`}
+function show(id){document.querySelectorAll("#panels section").forEach(s=>s.classList.toggle("on",s.id===id));document.querySelectorAll("#tabs button").forEach(b=>b.classList.toggle("on",b.dataset.p===id));setTimeout(()=>window.dispatchEvent(new Event("resize")),50)}
+const ctxOf=t=>{const r=R[t],i=r.D.info,m=r.m;return JSON.stringify({nombre:i.name,sector:i.sector,industria:i.industry,pais:i.country,negocio:i.summary,pe:m.pe,ps:m.ps,margen_op:m.mol,roe:m.roe,crec_ventas_cagr:m.cagr,valor_mercado:m.mc,ventas_ultimas:r.D.fin.map(x=>[x.y,x.rev,x.ni])})};
+const ai=(t,part)=>api("/api/analyze",{method:"POST",headers:{"content-type":"application/json","x-access-code":$("#code").value},body:JSON.stringify({ticker:t,part,search:$("#web").checked,ctx:ctxOf(t)})});
+async function enrich(t){const r=R[t],ck="ai:"+t+":"+($("#web").checked?1:0);let a=null;
+ if(!$("#useai").checked)r.aerr="IA apagada (modo sin costo): solo números y peers manuales.";
+ else{try{const c=JSON.parse(localStorage.getItem(ck)||"null");if(c&&Date.now()-c.ts<6048e5)a=c.a}catch{}
+  if(!a){const [A,B]=await Promise.all([ai(t,"A"),ai(t,"B")].map(p=>p.catch(e=>({_e:e.message}))));
+   if(A._e&&B._e)r.aerr="La IA no respondió: "+A._e+".";
+   else{a={...(A._e?{}:A),...(B._e?{}:B)};if(!A._e&&!B._e)try{localStorage.setItem(ck,JSON.stringify({ts:Date.now(),a}))}catch{}}}}
+ r.a=a;let pl=($("#manual").value||"").split(",").map(s=>s.trim().toUpperCase()).filter(Boolean);if(!pl.length)pl=(r.a?.peers||[]);
+ pl=pl.map(s=>String(s).toUpperCase()).filter(s=>s!==t).slice(0,6);
+ if(pl.length)try{r.peers=(await api("/api/yahoo?peers="+encodeURIComponent(pl.join(",")))).peers}catch{}
+ r.pm={pe:med(r.peers.map(x=>x.pe)),ev:med(r.peers.map(x=>x.ev)),ps:med(r.peers.map(x=>x.ps))};
+ calc(t);paintAI(t);paintQ4(t);paintScore(t);paintPeers(t);renderCmp()}
+async function load(t){try{const D=await api("/api/yahoo?t="+encodeURIComponent(t));if(!D.c.length)throw new Error("Sin precios para "+t);
+ R[t]={D,m:metrics(D),hm:histMult(D),peers:[],a:null};calc(t);
+ const s=document.createElement("section");s.id="p-"+K(t);s.innerHTML=tabHTML(t);$("#panels").appendChild(s);
+ const b=document.createElement("button");b.textContent="📈 "+t;b.dataset.p=s.id;b.onclick=()=>show(s.id);$("#tabs").insertBefore(b,$("#tabs").querySelector("[data-x]"));
+ paintScore(t);paintQ4(t);paintPrice(t);paintFin(t);return t}catch(e){$("#st").innerHTML+=`<div class="box bad">${esc(t)}: ${esc(e.message)}</div>`}}
+$("#go").onclick=async()=>{const ts=[...new Set($("#tk").value.toUpperCase().split(",").map(s=>s.trim()).filter(Boolean))].slice(0,6);if(!ts.length)return;
+ R={};$("#st").textContent="Cargando datos de Yahoo…";$("#tabs").innerHTML="";$("#panels").innerHTML="";
+ const xs=[["⚖️ Comparador","p-cmp"],["🪣 Portafolio","p-pf"]];
+ xs.forEach(([n,id])=>{const b=document.createElement("button");b.textContent=n;b.dataset.p=id;b.dataset.x=1;b.onclick=()=>{show(id);if(id==="p-cmp")renderCmp()};$("#tabs").appendChild(b);const s=document.createElement("section");s.id=id;$("#panels").appendChild(s)});
+ pfUI();const ok=(await Promise.all(ts.map(load))).filter(Boolean);if(!ok.length){$("#st").innerHTML+="<br>Revisa el símbolo en Yahoo Finance.";return}
+ show("p-"+K(ok[0]));$("#st").textContent="Yahoo listo. La IA está redactando narrativa y moats…";
+ await Promise.all(ok.map(enrich));$("#st").textContent="Listo."};
+$("#yrs").onchange=()=>{Object.keys(R).forEach(paintPrice);renderCmp()};
+document.querySelectorAll(".w").forEach(e=>e.onchange=()=>{Object.keys(R).forEach(t=>{calc(t);paintScore(t)});renderCmp()});
+
+/* ---------- comparador ---------- */
+function renderCmp(){const el=$("#p-cmp"),ts=Object.keys(R);if(!el)return;if(ts.length<2){el.innerHTML='<p class="mut">Analiza 2 o más tickers para compararlos.</p>';return}
+ const inds={};ts.forEach(t=>{const x=R[t].D.info.industry||R[t].D.info.sector;if(x)inds[x]=(inds[x]||0)+1});const top=Object.entries(inds).sort((a,b)=>b[1]-a[1])[0];
+ el.innerHTML=(ts.length>=3&&top&&top[1]/ts.length>=.5?`<div class="box warn">⚠️ Riesgo de concentración: ${top[1]} de ${ts.length} empresas son de «${esc(top[0])}». Si ese tema se cae, se caen juntas.</div>`:"")+
+ `<div style="overflow-x:auto"><table><tr><th></th>${ts.map(t=>`<th>${esc(t)}</th>`).join("")}</tr>
+ ${[...PIL.map((p,i)=>[p,t=>R[t].s[i].toFixed(1)]),["SCORE TOTAL",t=>"<b>"+R[t].tot.toFixed(0)+"</b>"],["P/E",t=>fm(R[t].m.pe,"x")],["P/S",t=>fm(R[t].m.ps,"x")],["EV/EBITDA",t=>fm(R[t].m.ev,"x")],["ROE",t=>fm(R[t].m.roe,"p")],["Margen op.",t=>fm(R[t].m.mol,"p")],["Ventas CAGR",t=>fm(R[t].m.cagr,"p")]].map(([n,f])=>`<tr><td>${n}</td>${ts.map(t=>`<td>${f(t)}</td>`).join("")}</tr>`).join("")}</table></div>
+ <div class="g2"><div id="c-ra"></div><div id="c-bar"></div></div><div id="c-px"></div>`;
+ radar("c-ra",ts.map(t=>[t,R[t].s]));
+ P("c-bar",[{type:"bar",x:ts,y:ts.map(t=>R[t].tot),marker:{color:COL}}],{title:{text:"Score total",font:{size:13}},yaxis:{range:[0,100]},height:340});
+ P("c-px",ts.map((t,k)=>{const D=R[t].D,ix=sliceYrs(D),b=D.c[ix[0]];return{x:ix.map(i=>new Date(D.t[i]*1000)),y:ix.map(i=>D.c[i]/b*100),name:t,line:{color:COL[k]}}}),{title:{text:"Rendimiento (base 100)",font:{size:13}},height:340,hovermode:"x unified"})}
+
+/* ---------- portafolio: 2 cubetas ---------- */
+function pfUI(){const el=$("#p-pf");el.innerHTML=`<p class="mut">Cubeta base: índices pasivos. Cubeta activa: 10–15 empresas analizadas (1–3% exploratorias, más de 10% solo con alta convicción). Se guarda en este navegador.</p>
+ <div class="row"><input id="pt" placeholder="Ticker" style="width:110px"><input id="pw" type="number" placeholder="% del portafolio" style="width:130px"><select id="pb"><option value="activa">Activa</option><option value="base">Base</option></select><button id="pa">Agregar</button><button class="s" id="pc">Calcular</button></div>
+ <div id="pl"></div><div id="pr"></div>`;$("#pa").onclick=()=>{const t=$("#pt").value.trim().toUpperCase(),w=+$("#pw").value;if(!t||!(w>0))return;PF.push({t,w,b:$("#pb").value});savePF();$("#pt").value=$("#pw").value=""};$("#pc").onclick=calcPF;drawPF()}
+const savePF=()=>{localStorage.setItem("pf",JSON.stringify(PF));drawPF()};
+function drawPF(){$("#pl").innerHTML=PF.length?`<table><tr><th>Ticker</th><th>%</th><th>Cubeta</th><th>Score</th><th></th></tr>${PF.map((x,i)=>`<tr><td>${esc(x.t)}</td><td>${x.w}</td><td>${x.b}</td><td>${R[x.t]?R[x.t].tot.toFixed(0):"—"}</td><td><button class="s" onclick="PF.splice(${i},1);savePF()">✕</button></td></tr>`).join("")}</table>`:'<p class="mut">Aún no hay posiciones.</p>'}
+async function calcPF(){if(!PF.length)return;const tot=sum(PF.map(x=>x.w)),act=PF.filter(x=>x.b==="activa"),al=[];let sec={};
+ try{(await api("/api/yahoo?peers="+encodeURIComponent([...new Set(PF.map(x=>x.t))].join(",")))).peers.forEach(p=>sec[p.t]=p.sector||"Fondos / sin sector")}catch{}
+ const S=x=>sec[x.t]||"Sin dato";
+ if(Math.abs(tot-100)>.5)al.push(`Tus pesos suman ${tot.toFixed(1)}%, no 100%.`);
+ if(act.length<10||act.length>15)al.push(`Tienes ${act.length} posiciones activas; la masterclass sugiere entre 10 y 15.`);
+ act.filter(x=>x.w>10).forEach(x=>al.push(`${x.t} pesa ${x.w}%: más de 10% solo con tesis de alta convicción.`));
+ const aw=sum(act.map(x=>x.w)),bs={};act.forEach(x=>bs[S(x)]=(bs[S(x)]||0)+x.w);
+ Object.entries(bs).filter(([,w])=>aw&&w/aw>.4).forEach(([s,w])=>al.push(`Concentración: ${(w/aw*100).toFixed(0)}% de tu cubeta activa está en «${s}». Si ese tema cae, caen juntas.`));
+ $("#pr").innerHTML=(al.length?al.map(a=>`<div class="box warn">⚠️ ${esc(a)}</div>`).join(""):'<div class="box ok">Sin alertas de balance.</div>')+'<div class="g2"><div id="pf1"></div><div id="pf2"></div></div><div id="pf3"></div>';
+ const agg=f=>{const o={};PF.forEach(x=>o[f(x)]=(o[f(x)]||0)+x.w);return o},b=agg(x=>x.b),s=agg(S);
+ P("pf1",[{type:"pie",labels:Object.keys(b),values:Object.values(b),hole:.5}],{title:{text:"Por cubeta",font:{size:13}},height:300});
+ P("pf2",[{type:"pie",labels:Object.keys(s),values:Object.values(s),hole:.5}],{title:{text:"Por sector",font:{size:13}},height:300});
+ const o=[...PF].sort((x,y)=>y.w-x.w);P("pf3",[{type:"bar",x:o.map(x=>x.t),y:o.map(x=>x.w),marker:{color:o.map(x=>x.b==="base"?"#94a3b8":"#2563eb")}}],{title:{text:"Peso por posición (%)",font:{size:13}},height:300})}
+</script></body></html>
