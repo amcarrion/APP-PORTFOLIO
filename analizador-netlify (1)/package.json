@@ -1,8 +1,0 @@
-{
-  "name": "analizador-empresas",
-  "private": true,
-  "version": "2.0.0",
-  "dependencies": {
-    "yahoo-finance2": "^2.14.2"
-  }
-}
