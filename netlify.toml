@@ -1,0 +1,12 @@
+# The site lives in the analizador-netlify/ subfolder.
+# publish and functions paths are relative to the base directory.
+[build]
+  base = "analizador-netlify"
+  publish = "public"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
